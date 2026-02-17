@@ -502,6 +502,40 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ===== AUTO-MIGRATE =====
+async function ensureTables() {
+  const fs = require('fs');
+  const path = require('path');
+
+  try {
+    // Verificar se as tabelas existem
+    const check = await query(
+      `SELECT COUNT(*) as count FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name IN ('instances', 'users', 'sessions')`,
+      []
+    );
+
+    if (parseInt(check.rows[0].count) < 3) {
+      console.log('📝 Tabelas não encontradas, criando schema...');
+
+      const schemaPath = path.join(__dirname, 'database', 'schema.sql');
+      const schema = fs.readFileSync(schemaPath, 'utf8');
+      await query(schema);
+      console.log('✅ Schema principal criado');
+
+      const authSchemaPath = path.join(__dirname, 'database', 'auth-schema.sql');
+      const authSchema = fs.readFileSync(authSchemaPath, 'utf8');
+      await query(authSchema);
+      console.log('✅ Schema de autenticação criado');
+    } else {
+      console.log('✅ Tabelas já existem');
+    }
+  } catch (error) {
+    console.error('❌ Erro ao criar tabelas:', error.message);
+    throw error;
+  }
+}
+
 // ===== STARTUP =====
 async function startServer() {
   try {
@@ -512,6 +546,9 @@ async function startServer() {
       console.error('❌ Falha na conexão com o banco');
       process.exit(1);
     }
+
+    // Criar tabelas automaticamente se não existirem
+    await ensureTables();
 
     console.log('🔄 Sincronizando instâncias...');
     await syncAllInstances();
