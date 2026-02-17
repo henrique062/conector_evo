@@ -11,6 +11,7 @@ let bindingUserId = null;
 
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', () => {
+  loadSavedCredentials();
   checkAuth();
 });
 
@@ -92,8 +93,21 @@ async function handleLogin(e) {
   try {
     const email = document.getElementById('loginEmail').value;
     const password = document.getElementById('loginPassword').value;
+    const remember = document.getElementById('rememberMe').checked;
     const data = await api('POST', '/auth/login', { email, password });
     currentUser = data.user;
+
+    // Salvar ou limpar credenciais
+    if (remember) {
+      localStorage.setItem('savedEmail', email);
+      localStorage.setItem('savedPassword', btoa(password));
+      localStorage.setItem('rememberMe', 'true');
+    } else {
+      localStorage.removeItem('savedEmail');
+      localStorage.removeItem('savedPassword');
+      localStorage.removeItem('rememberMe');
+    }
+
     showDashboard();
   } catch (error) {
     errorEl.textContent = error.message || 'Credenciais invalidas';
@@ -101,6 +115,17 @@ async function handleLogin(e) {
   } finally {
     btn.querySelector('.btn-text').style.display = 'inline';
     btn.querySelector('.btn-loader').style.display = 'none';
+  }
+}
+
+function loadSavedCredentials() {
+  const saved = localStorage.getItem('rememberMe');
+  if (saved === 'true') {
+    const email = localStorage.getItem('savedEmail');
+    const password = localStorage.getItem('savedPassword');
+    if (email) document.getElementById('loginEmail').value = email;
+    if (password) document.getElementById('loginPassword').value = atob(password);
+    document.getElementById('rememberMe').checked = true;
   }
 }
 
@@ -181,6 +206,7 @@ function createInstanceCard(inst) {
 
   const statusClass = status === 'connected' || status === 'open' ? 'connected' : status === 'connecting' ? 'connecting' : 'disconnected';
   const statusLabel = statusClass === 'connected' ? 'Conectado' : statusClass === 'connecting' ? 'Conectando...' : 'Desconectado';
+  const badgeClass = statusClass === 'connected' ? 'badge-open' : statusClass === 'connecting' ? 'badge-connecting' : 'badge-close';
   const isConnected = statusClass === 'connected';
 
   const initials = profileName.slice(0, 2).toUpperCase();
@@ -191,32 +217,37 @@ function createInstanceCard(inst) {
   // User normal: apenas connect e disconnect
   const actions = [];
   if (!isConnected) {
-    actions.push(`<button class="btn btn-sm btn-accent" onclick="connectInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 12 10 17 20 7"/></svg> Conectar</button>`);
+    actions.push(`<button class="btn btn-sm btn-connect" onclick="connectInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 12 10 17 20 7"/></svg> Conectar</button>`);
   }
   if (isMaster) {
-    actions.push(`<button class="btn btn-sm btn-ghost" onclick="restartInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Restart</button>`);
+    actions.push(`<button class="btn btn-sm btn-restart" onclick="restartInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Restart</button>`);
   }
   if (isConnected) {
-    actions.push(`<button class="btn btn-sm btn-warning" onclick="logoutInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Desconectar</button>`);
+    actions.push(`<button class="btn btn-sm btn-logout" onclick="logoutInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Desconectar</button>`);
   }
   if (isMaster) {
-    actions.push(`<button class="btn btn-sm btn-danger" onclick="deleteInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Excluir</button>`);
+    actions.push(`<button class="btn btn-sm btn-delete" onclick="deleteInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Excluir</button>`);
   }
 
   return `
     <div class="instance-card" data-instance="${escapeHtml(name)}">
       <div class="card-header">
-        <div class="card-avatar">${avatarHtml}</div>
-        <div class="card-info">
-          <h3 class="card-name">${escapeHtml(profileName)}</h3>
-          <span class="card-integration">${escapeHtml(name)}</span>
+        <div class="card-identity">
+          <div class="card-avatar ${statusClass}">${avatarHtml}</div>
+          <div class="card-info">
+            <h3 class="card-name">${escapeHtml(profileName)}</h3>
+            <span class="card-integration">${escapeHtml(name)}</span>
+          </div>
         </div>
-        <div class="card-status ${statusClass}">
-          <div class="status-dot"></div>
+        <div class="card-status-badge ${badgeClass}">
+          <div class="status-dot ${statusClass === 'connected' ? 'connected' : statusClass === 'connecting' ? '' : 'disconnected'}"></div>
           <span>${statusLabel}</span>
         </div>
       </div>
-      ${number ? `<div class="card-number"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72"/></svg> ${formatPhone(number)}</div>` : ''}
+      <div class="card-details">
+        ${number ? `<div class="detail-row"><span class="detail-label">Telefone</span><span class="detail-value">${formatPhone(number)}</span></div>` : `<div class="detail-row"><span class="detail-label">Telefone</span><span class="detail-value" style="color:var(--text-tertiary);">Nao vinculado</span></div>`}
+        <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value" style="color:${isConnected ? 'var(--green)' : 'var(--red)'};">${statusLabel}</span></div>
+      </div>
       <div class="card-actions">${actions.join('')}</div>
     </div>
   `;
