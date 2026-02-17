@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 
 // Provider config
@@ -186,6 +186,53 @@ app.get('/api/auth/me', requireAuth, (req, res) => {
   res.json({ user: req.user, provider: API_PROVIDER });
 });
 
+// ===== PROFILE ROUTES =====
+
+app.put('/api/profile', requireAuth, async (req, res) => {
+  try {
+    const { name, email, profile_picture } = req.body;
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (name) { updates.push(`name = $${paramIndex++}`); values.push(name); }
+    if (email) { updates.push(`email = $${paramIndex++}`); values.push(email); }
+    if (profile_picture !== undefined) { updates.push(`profile_picture = $${paramIndex++}`); values.push(profile_picture); }
+
+    if (updates.length === 0) return res.status(400).json({ error: 'Nenhum dado para atualizar' });
+
+    values.push(req.user.id);
+    const result = await query(
+      `UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex} RETURNING id, email, name, role, profile_picture`,
+      values
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ error: 'Email ja em uso' });
+    res.status(500).json({ error: 'Falha ao atualizar perfil' });
+  }
+});
+
+app.put('/api/profile/password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Senha atual e nova sao obrigatorias' });
+    }
+
+    const bcrypt = require('bcrypt');
+    const userResult = await query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+    const valid = await bcrypt.compare(currentPassword, userResult.rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: 'Senha atual incorreta' });
+
+    const newHash = await hashPassword(newPassword);
+    await query('UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [newHash, req.user.id]);
+    res.json({ message: 'Senha alterada com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao alterar senha' });
+  }
+});
+
 // ===== USER MANAGEMENT (MASTER ONLY) =====
 
 app.get('/api/users', requireAuth, requireMaster, async (req, res) => {
@@ -221,6 +268,34 @@ app.post('/api/users', requireAuth, requireMaster, async (req, res) => {
       return res.status(409).json({ error: 'Email já cadastrado' });
     }
     res.status(500).json({ error: 'Falha ao criar usuário' });
+  }
+});
+
+app.put('/api/users/:id', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const { name, email, role, is_active } = req.body;
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (name !== undefined) { updates.push(`name = $${paramIndex++}`); values.push(name); }
+    if (email !== undefined) { updates.push(`email = $${paramIndex++}`); values.push(email); }
+    if (role !== undefined) { updates.push(`role = $${paramIndex++}`); values.push(role === 'master' ? 'master' : 'user'); }
+    if (is_active !== undefined) { updates.push(`is_active = $${paramIndex++}`); values.push(is_active); }
+
+    if (updates.length === 0) return res.status(400).json({ error: 'Nenhum dado para atualizar' });
+
+    values.push(parseInt(req.params.id));
+    const result = await query(
+      `UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex} RETURNING id, email, name, role, is_active`,
+      values
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Usuario nao encontrado' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ error: 'Email ja em uso' });
+    res.status(500).json({ error: 'Falha ao atualizar usuario' });
   }
 });
 
@@ -534,6 +609,15 @@ async function ensureTables() {
     } else {
       console.log('✅ Tabelas já existem');
     }
+
+    // Migration: adicionar coluna profile_picture se não existir
+    await query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'profile_picture') THEN
+          ALTER TABLE users ADD COLUMN profile_picture TEXT;
+        END IF;
+      END $$;
+    `);
   } catch (error) {
     console.error('❌ Erro ao criar tabelas:', error.message);
     throw error;

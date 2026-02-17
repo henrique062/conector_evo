@@ -1,4 +1,4 @@
-// ===== Conector Evo — app.js =====
+// ===== Conector WhatsApp — app.js =====
 
 // State
 let currentUser = null;
@@ -61,8 +61,16 @@ function showDashboard() {
   // Update user info
   document.getElementById('userName').textContent = currentUser.name || currentUser.email;
   document.getElementById('userRole').textContent = currentUser.role === 'master' ? 'Administrador' : 'Usuario';
-  document.getElementById('userAvatar').textContent = (currentUser.name || currentUser.email).charAt(0).toUpperCase();
   document.getElementById('sidebarRole').textContent = currentUser.role === 'master' ? 'Admin' : 'Dashboard';
+
+  // Profile picture ou iniciais no sidebar
+  const avatarEl = document.getElementById('userAvatar');
+  if (currentUser.profile_picture) {
+    avatarEl.innerHTML = `<img src="${currentUser.profile_picture}" alt="Avatar">`;
+  } else {
+    avatarEl.innerHTML = '';
+    avatarEl.textContent = (currentUser.name || currentUser.email).charAt(0).toUpperCase();
+  }
 
   // Show/hide admin elements
   const isMaster = currentUser.role === 'master';
@@ -152,6 +160,7 @@ function switchPage(page) {
     users: ['Usuarios', 'Gerenciar acessos e permissoes'],
     logs: ['Logs de Atividade', 'Historico de operacoes'],
     settings: ['Configuracoes', 'Informacoes do sistema'],
+    profile: ['Meu Perfil', 'Gerencie suas informacoes pessoais'],
   };
 
   const [title, sub] = titles[page] || ['Dashboard', ''];
@@ -160,6 +169,7 @@ function switchPage(page) {
 
   if (page === 'users') loadUsers();
   if (page === 'logs') loadLogs();
+  if (page === 'profile') loadProfile();
 }
 
 // ===== Instances =====
@@ -425,6 +435,9 @@ async function loadUsers() {
       const statusBadge = u.is_active ? '<span class="badge badge-active">Ativo</span>' : '<span class="badge badge-inactive">Inativo</span>';
       const isSelf = u.id === currentUser.id;
 
+      const safeName = (u.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const safeEmail = u.email.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
       return `<tr>
         <td>${escapeHtml(u.name || '-')}</td>
         <td>${escapeHtml(u.email)}</td>
@@ -435,7 +448,8 @@ async function loadUsers() {
         </td>
         <td>
           <div class="table-actions">
-            ${!isSelf ? `<button class="btn-xs btn-xs-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.email)}')">Excluir</button>` : '<span style="color:var(--text-tertiary);font-size:0.75rem;">Voce</span>'}
+            <button class="btn-xs btn-xs-primary" onclick="openEditUserModal(${u.id}, '${safeName}', '${safeEmail}', '${u.role}', ${u.is_active})">Editar</button>
+            ${!isSelf ? `<button class="btn-xs btn-xs-danger" onclick="deleteUser(${u.id}, '${safeEmail}')">Excluir</button>` : '<span style="color:var(--text-tertiary);font-size:0.75rem;">Voce</span>'}
           </div>
         </td>
       </tr>`;
@@ -607,4 +621,134 @@ function formatPhone(number) {
     return `+${n.slice(0, 2)} (${n.slice(2, 4)}) ${n.slice(4, 9)}-${n.slice(9)}`;
   }
   return number;
+}
+
+// ===== Profile =====
+function loadProfile() {
+  document.getElementById('profileName').value = currentUser.name || '';
+  document.getElementById('profileEmail').value = currentUser.email || '';
+
+  const avatarLarge = document.getElementById('profileAvatarLarge');
+  if (currentUser.profile_picture) {
+    avatarLarge.innerHTML = `<img src="${currentUser.profile_picture}" alt="Avatar">`;
+  } else {
+    avatarLarge.innerHTML = '';
+    avatarLarge.textContent = (currentUser.name || currentUser.email).charAt(0).toUpperCase();
+  }
+
+  // File input listener
+  const input = document.getElementById('profilePictureInput');
+  input.onchange = function () {
+    const file = this.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return showToast('Imagem muito grande (max 2MB)', 'error');
+
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      const base64 = e.target.result;
+      avatarLarge.innerHTML = `<img src="${base64}" alt="Avatar">`;
+      avatarLarge.dataset.pendingPicture = base64;
+    };
+    reader.readAsDataURL(file);
+  };
+}
+
+async function saveProfile() {
+  const name = document.getElementById('profileName').value.trim();
+  const email = document.getElementById('profileEmail').value.trim();
+  const avatarLarge = document.getElementById('profileAvatarLarge');
+  const pendingPicture = avatarLarge.dataset.pendingPicture;
+
+  const body = {};
+  if (name) body.name = name;
+  if (email) body.email = email;
+  if (pendingPicture) body.profile_picture = pendingPicture;
+
+  try {
+    const updated = await api('PUT', '/profile', body);
+    currentUser.name = updated.name;
+    currentUser.email = updated.email;
+    currentUser.profile_picture = updated.profile_picture;
+    delete avatarLarge.dataset.pendingPicture;
+
+    // Refresh sidebar
+    document.getElementById('userName').textContent = currentUser.name || currentUser.email;
+    const sidebarAvatar = document.getElementById('userAvatar');
+    if (currentUser.profile_picture) {
+      sidebarAvatar.innerHTML = `<img src="${currentUser.profile_picture}" alt="Avatar">`;
+    } else {
+      sidebarAvatar.innerHTML = '';
+      sidebarAvatar.textContent = (currentUser.name || currentUser.email).charAt(0).toUpperCase();
+    }
+
+    showToast('Perfil atualizado!', 'success');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+function removeProfilePicture() {
+  api('PUT', '/profile', { profile_picture: null }).then(() => {
+    currentUser.profile_picture = null;
+    const avatarLarge = document.getElementById('profileAvatarLarge');
+    avatarLarge.innerHTML = '';
+    avatarLarge.textContent = (currentUser.name || currentUser.email).charAt(0).toUpperCase();
+
+    const sidebarAvatar = document.getElementById('userAvatar');
+    sidebarAvatar.innerHTML = '';
+    sidebarAvatar.textContent = (currentUser.name || currentUser.email).charAt(0).toUpperCase();
+
+    showToast('Foto removida', 'success');
+  }).catch(err => showToast(err.message, 'error'));
+}
+
+async function changePassword() {
+  const current = document.getElementById('currentPassword').value;
+  const newPwd = document.getElementById('newPassword').value;
+  const confirm = document.getElementById('confirmPassword').value;
+
+  if (!current || !newPwd) return showToast('Preencha todos os campos', 'error');
+  if (newPwd !== confirm) return showToast('As senhas nao conferem', 'error');
+  if (newPwd.length < 6) return showToast('A nova senha deve ter pelo menos 6 caracteres', 'error');
+
+  try {
+    await api('PUT', '/profile/password', { currentPassword: current, newPassword: newPwd });
+    showToast('Senha alterada com sucesso!', 'success');
+    document.getElementById('currentPassword').value = '';
+    document.getElementById('newPassword').value = '';
+    document.getElementById('confirmPassword').value = '';
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+// ===== Edit User (Master) =====
+function openEditUserModal(id, name, email, role, isActive) {
+  document.getElementById('editUserId').value = id;
+  document.getElementById('editUserName').value = name || '';
+  document.getElementById('editUserEmail').value = email || '';
+  document.getElementById('editUserRole').value = role || 'user';
+  document.getElementById('editUserActive').checked = isActive;
+  document.getElementById('editUserModal').classList.add('active');
+}
+
+function closeEditUserModal() {
+  document.getElementById('editUserModal').classList.remove('active');
+}
+
+async function saveEditUser() {
+  const id = document.getElementById('editUserId').value;
+  const name = document.getElementById('editUserName').value.trim();
+  const email = document.getElementById('editUserEmail').value.trim();
+  const role = document.getElementById('editUserRole').value;
+  const is_active = document.getElementById('editUserActive').checked;
+
+  try {
+    await api('PUT', `/users/${id}`, { name, email, role, is_active });
+    showToast('Usuario atualizado!', 'success');
+    closeEditUserModal();
+    loadUsers();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
 }
