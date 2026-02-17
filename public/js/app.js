@@ -283,18 +283,87 @@ function updateStats() {
 }
 
 async function refreshStatuses() {
+  let hasChanges = false;
+
   for (const inst of instances) {
     try {
       const name = encodeURIComponent(inst.instance_name);
       const data = await api('GET', `/instances/${name}/status`);
       const newStatus = normalizeStatus(data?.state || data?.instance?.status);
       if (newStatus && newStatus !== inst.status) {
+        const oldStatus = inst.status;
         inst.status = newStatus;
+        hasChanges = true;
+
+        // Atualizar apenas o card que mudou (SPA)
+        const card = document.querySelector(`.instance-card[data-instance="${CSS.escape(inst.instance_name)}"]`);
+        if (card) {
+          updateCardStatus(card, inst);
+        }
       }
     } catch { /* ignore */ }
   }
-  renderInstances();
-  updateStats();
+
+  if (hasChanges) {
+    updateStats();
+  }
+}
+
+function updateCardStatus(card, inst) {
+  const status = normalizeStatus(inst.status);
+  const statusClass = status === 'connected' || status === 'open' ? 'connected' : status === 'connecting' ? 'connecting' : 'disconnected';
+  const statusLabel = statusClass === 'connected' ? 'Conectado' : statusClass === 'connecting' ? 'Conectando...' : 'Desconectado';
+  const badgeClass = statusClass === 'connected' ? 'badge-open' : statusClass === 'connecting' ? 'badge-connecting' : 'badge-close';
+  const isConnected = statusClass === 'connected';
+  const isMaster = currentUser?.role === 'master';
+  const name = inst.instance_name || '';
+  const safeName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+  // Atualizar avatar border color
+  const avatar = card.querySelector('.card-avatar');
+  if (avatar) {
+    avatar.className = `card-avatar ${statusClass}`;
+  }
+
+  // Atualizar badge de status
+  const badge = card.querySelector('.card-status-badge');
+  if (badge) {
+    badge.className = `card-status-badge ${badgeClass}`;
+    const dot = badge.querySelector('.status-dot');
+    if (dot) dot.className = `status-dot ${statusClass === 'connected' ? 'connected' : statusClass === 'connecting' ? '' : 'disconnected'}`;
+    const span = badge.querySelector('span');
+    if (span) span.textContent = statusLabel;
+  }
+
+  // Atualizar detalhe de status
+  const details = card.querySelectorAll('.detail-row');
+  const statusRow = details[details.length - 1];
+  if (statusRow) {
+    const val = statusRow.querySelector('.detail-value');
+    if (val) {
+      val.textContent = statusLabel;
+      val.style.color = isConnected ? 'var(--green)' : 'var(--red)';
+    }
+  }
+
+  // Reconstruir botões de ação
+  const actionsContainer = card.querySelector('.card-actions');
+  if (actionsContainer) {
+    const actions = [];
+    if (!isConnected) {
+      actions.push(`<button class="btn btn-sm btn-connect" onclick="connectInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 12 10 17 20 7"/></svg> Conectar</button>`);
+    }
+    if (isMaster) {
+      actions.push(`<button class="btn btn-sm btn-restart" onclick="restartInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Restart</button>`);
+    }
+    if (isConnected) {
+      actions.push(`<button class="btn btn-sm btn-logout" onclick="logoutInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Desconectar</button>`);
+    }
+    if (isMaster) {
+      actions.push(`<button class="btn btn-sm btn-delete" onclick="deleteInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Excluir</button>`);
+    }
+    actionsContainer.innerHTML = actions.join('');
+  }
 }
 
 // ===== Instance Actions =====

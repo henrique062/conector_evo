@@ -365,6 +365,17 @@ app.post('/api/users/:id/instances', requireAuth, requireMaster, async (req, res
       return res.status(409).json({ error: 'Vinculação já existe' });
     }
 
+    // Auto-set foto de perfil: se o usuário não tem foto, usar a do WhatsApp da instância
+    try {
+      const userCheck = await query('SELECT profile_picture FROM users WHERE id = $1', [req.params.id]);
+      if (userCheck.rows.length > 0 && !userCheck.rows[0].profile_picture) {
+        const instCheck = await query('SELECT profile_picture_url FROM instances WHERE id = $1', [instance_id]);
+        if (instCheck.rows.length > 0 && instCheck.rows[0].profile_picture_url) {
+          await query('UPDATE users SET profile_picture = $1 WHERE id = $2', [instCheck.rows[0].profile_picture_url, req.params.id]);
+        }
+      }
+    } catch (e) { /* não bloquear a vinculação por erro na foto */ }
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: 'Falha ao vincular instância' });
