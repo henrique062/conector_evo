@@ -214,19 +214,22 @@ function createInstanceCard(inst) {
     ? `<img src="${escapeHtml(profilePic)}" alt="${escapeHtml(name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="avatar-initials" style="display:none">${initials}</span>`
     : `<span class="avatar-initials">${initials}</span>`;
 
+  // Escape name for safe use in onclick (replace ' with \')
+  const safeName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
   // User normal: apenas connect e disconnect
   const actions = [];
   if (!isConnected) {
-    actions.push(`<button class="btn btn-sm btn-connect" onclick="connectInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 12 10 17 20 7"/></svg> Conectar</button>`);
+    actions.push(`<button class="btn btn-sm btn-connect" onclick="connectInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 12 10 17 20 7"/></svg> Conectar</button>`);
   }
   if (isMaster) {
-    actions.push(`<button class="btn btn-sm btn-restart" onclick="restartInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Restart</button>`);
+    actions.push(`<button class="btn btn-sm btn-restart" onclick="restartInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Restart</button>`);
   }
   if (isConnected) {
-    actions.push(`<button class="btn btn-sm btn-logout" onclick="logoutInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Desconectar</button>`);
+    actions.push(`<button class="btn btn-sm btn-logout" onclick="logoutInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Desconectar</button>`);
   }
   if (isMaster) {
-    actions.push(`<button class="btn btn-sm btn-delete" onclick="deleteInstance('${escapeHtml(name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Excluir</button>`);
+    actions.push(`<button class="btn btn-sm btn-delete" onclick="deleteInstance('${safeName}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Excluir</button>`);
   }
 
   return `
@@ -272,7 +275,7 @@ function updateStats() {
 async function refreshStatuses() {
   for (const inst of instances) {
     try {
-      const name = inst.instance_name;
+      const name = encodeURIComponent(inst.instance_name);
       const data = await api('GET', `/instances/${name}/status`);
       const newStatus = normalizeStatus(data?.state || data?.instance?.status);
       if (newStatus && newStatus !== inst.status) {
@@ -329,7 +332,7 @@ async function connectInstance(name) {
   document.getElementById('qrStatus').innerHTML = '<div class="status-dot"></div><span>Aguardando leitura do QR Code...</span>';
 
   try {
-    const data = await api('GET', `/instances/${name}/connect`);
+    const data = await api('GET', `/instances/${encodeURIComponent(name)}/connect`);
     displayQrCode(data);
     startQrPolling(name);
   } catch (error) {
@@ -357,7 +360,8 @@ function startQrPolling(name) {
   if (qrPollingInterval) clearInterval(qrPollingInterval);
   qrPollingInterval = setInterval(async () => {
     try {
-      const status = await api('GET', `/instances/${name}/status`);
+      const encodedName = encodeURIComponent(name);
+      const status = await api('GET', `/instances/${encodedName}/status`);
       const state = normalizeStatus(status?.state || status?.instance?.status);
 
       if (state === 'connected') {
@@ -368,7 +372,7 @@ function startQrPolling(name) {
         setTimeout(() => { closeQrModal(); loadInstances(); }, 1500);
       } else {
         // Refresh QR
-        const qrData = await api('GET', `/instances/${name}/connect`).catch(() => null);
+        const qrData = await api('GET', `/instances/${encodedName}/connect`).catch(() => null);
         if (qrData) displayQrCode(qrData);
       }
     } catch { /* ignore */ }
@@ -384,7 +388,7 @@ function closeQrModal() {
 function restartInstance(name) {
   openConfirmModal('Reiniciar Instancia', `Deseja reiniciar "${name}"?`, async () => {
     try {
-      await api('PUT', `/instances/${name}/restart`);
+      await api('PUT', `/instances/${encodeURIComponent(name)}/restart`);
       showToast(`${name} reiniciada`, 'success');
       loadInstances();
     } catch (error) { showToast(error.message, 'error'); }
@@ -394,7 +398,7 @@ function restartInstance(name) {
 function logoutInstance(name) {
   openConfirmModal('Desconectar', `Deseja desconectar "${name}"?`, async () => {
     try {
-      await api('DELETE', `/instances/${name}/logout`);
+      await api('DELETE', `/instances/${encodeURIComponent(name)}/logout`);
       showToast(`${name} desconectada`, 'success');
       loadInstances();
     } catch (error) { showToast(error.message, 'error'); }
@@ -404,7 +408,7 @@ function logoutInstance(name) {
 function deleteInstance(name) {
   openConfirmModal('Excluir Instancia', `Tem certeza que deseja EXCLUIR "${name}"? Esta acao nao pode ser desfeita.`, async () => {
     try {
-      await api('DELETE', `/instances/${name}`);
+      await api('DELETE', `/instances/${encodeURIComponent(name)}`);
       showToast(`${name} excluida`, 'success');
       loadInstances();
     } catch (error) { showToast(error.message, 'error'); }

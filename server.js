@@ -84,14 +84,18 @@ async function syncInstanceToDB(instanceData) {
     // Mapear status para padrão interno
     if (status === 'open') status = 'connected';
 
+    const settingsJson = instanceData.token ? JSON.stringify({ uazapi_token: instanceData.token }) : null;
+
     const result = await query(
       `INSERT INTO instances (instance_name, integration, number, status, profile_name, profile_picture_url, qrcode, settings)
        VALUES ($1, $2, $3, $4, $5, $6, true, $7)
        ON CONFLICT (instance_name)
-       DO UPDATE SET status = $4, profile_name = $5, profile_picture_url = $6, number = COALESCE($3, instances.number), updated_at = CURRENT_TIMESTAMP
+       DO UPDATE SET status = $4, profile_name = $5, profile_picture_url = $6,
+         number = COALESCE($3, instances.number),
+         settings = COALESCE($7, instances.settings),
+         updated_at = CURRENT_TIMESTAMP
        RETURNING *`,
-      [name, integration, number, status, profileName, profilePictureUrl,
-        instanceData.token ? JSON.stringify({ uazapi_token: instanceData.token }) : null]
+      [name, integration, number, status, profileName, profilePictureUrl, settingsJson]
     );
 
     return result.rows[0];
