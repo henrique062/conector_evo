@@ -273,7 +273,7 @@ app.post('/api/users', requireAuth, requireMaster, async (req, res) => {
 
 app.put('/api/users/:id', requireAuth, requireMaster, async (req, res) => {
   try {
-    const { name, email, role, is_active } = req.body;
+    const { name, email, role, is_active, password } = req.body;
     const updates = [];
     const values = [];
     let paramIndex = 1;
@@ -282,6 +282,7 @@ app.put('/api/users/:id', requireAuth, requireMaster, async (req, res) => {
     if (email !== undefined) { updates.push(`email = $${paramIndex++}`); values.push(email); }
     if (role !== undefined) { updates.push(`role = $${paramIndex++}`); values.push(role === 'master' ? 'master' : 'user'); }
     if (is_active !== undefined) { updates.push(`is_active = $${paramIndex++}`); values.push(is_active); }
+    if (password) { updates.push(`password_hash = $${paramIndex++}`); values.push(await hashPassword(password)); }
 
     if (updates.length === 0) return res.status(400).json({ error: 'Nenhum dado para atualizar' });
 
@@ -309,6 +310,22 @@ app.delete('/api/users/:id', requireAuth, requireMaster, async (req, res) => {
     res.json({ message: 'Usuário excluído' });
   } catch (error) {
     res.status(500).json({ error: 'Falha ao excluir usuário' });
+  }
+});
+
+// ===== UNBOUND INSTANCES =====
+
+app.get('/api/instances/unbound', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT i.id, i.instance_name, i.status, i.number
+       FROM instances i
+       WHERE i.id NOT IN (SELECT instance_id FROM user_instances)
+       ORDER BY i.instance_name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao buscar instancias disponiveis' });
   }
 });
 

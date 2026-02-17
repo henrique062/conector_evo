@@ -1,0 +1,60 @@
+=============================================
+  CREDENCIAIS DE ACESSO - CONECTOR WHATSAPP
+=============================================
+
+--- USUÁRIO MASTER ---
+Email: henriquedev062@gmail.com
+Senha: b91318244
+Role: master
+
+--- USUÁRIOS DAS INSTÂNCIAS ---
+
+1. Backstage_teste
+   Email: backstage_teste@conectar.com
+   Senha: instancia123
+
+2. Daniel Vorxia
+   Email: danielvorxia@conectar.com
+   Senha: instancia123
+
+3. Henrique
+   Email: henrique@conectar.com
+   Senha: instancia123
+
+4. Henrique-claro
+   Email: henrique-claro@conectar.com
+   Senha: instancia123
+
+5. mb - boiçucanga
+   Email: mb-boicucanga@conectar.com
+   Senha: instancia123
+
+6. Mobyou Litoral Norte
+   Email: mobyoulitoralnorte@conectar.com
+   Senha: instancia123
+
+7. MOBYOU SÃO SEBA AGENTE
+   Email: mobyousaosebaagente@conectar.com
+   Senha: instancia123
+
+8. Mobyouubatuba
+   Email: mobyouubatuba@conectar.com
+   Senha: instancia123
+
+9. starcell
+   Email: starcell@conectar.com
+   Senha: instancia123
+
+10. Trooper01
+    Email: trooper01@conectar.com
+    Senha: instancia123
+
+11. Vanessa uGoo
+    Email: vanessaugoo@conectar.com
+    Senha: instancia123
+
+=============================================
+  IMPORTANTE: Todos os usuários de instância
+  têm role "user" e só enxergam sua própria
+  instância vinculada.
+=============================================

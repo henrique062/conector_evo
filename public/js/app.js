@@ -511,15 +511,27 @@ async function deleteUser(id, email) {
   });
 }
 
-function openBindModal(userId) {
+async function openBindModal(userId) {
   bindingUserId = userId;
   document.getElementById('bindModal').classList.add('active');
 
   const select = document.getElementById('bindInstance');
-  select.innerHTML = '<option value="">Selecione...</option>';
-  allInstances.forEach(i => {
-    select.innerHTML += `<option value="${i.id}">${escapeHtml(i.instance_name)}</option>`;
-  });
+  select.innerHTML = '<option value="">Carregando...</option>';
+
+  try {
+    const unbound = await api('GET', '/instances/unbound');
+    select.innerHTML = '<option value="">Selecione...</option>';
+    if (unbound.length === 0) {
+      select.innerHTML = '<option value="">Nenhuma instancia disponivel</option>';
+    } else {
+      unbound.forEach(i => {
+        select.innerHTML += `<option value="${i.id}">${escapeHtml(i.instance_name)}</option>`;
+      });
+    }
+  } catch (error) {
+    select.innerHTML = '<option value="">Erro ao carregar</option>';
+    showToast(error.message, 'error');
+  }
 }
 
 function closeBindModal() {
@@ -729,6 +741,7 @@ function openEditUserModal(id, name, email, role, isActive) {
   document.getElementById('editUserEmail').value = email || '';
   document.getElementById('editUserRole').value = role || 'user';
   document.getElementById('editUserActive').checked = isActive;
+  document.getElementById('editUserPassword').value = '';
   document.getElementById('editUserModal').classList.add('active');
 }
 
@@ -742,13 +755,34 @@ async function saveEditUser() {
   const email = document.getElementById('editUserEmail').value.trim();
   const role = document.getElementById('editUserRole').value;
   const is_active = document.getElementById('editUserActive').checked;
+  const password = document.getElementById('editUserPassword').value;
+
+  const body = { name, email, role, is_active };
+  if (password) body.password = password;
 
   try {
-    await api('PUT', `/users/${id}`, { name, email, role, is_active });
+    await api('PUT', `/users/${id}`, body);
     showToast('Usuario atualizado!', 'success');
     closeEditUserModal();
     loadUsers();
   } catch (error) {
     showToast(error.message, 'error');
+  }
+}
+
+// ===== Toggle Login Password =====
+function toggleLoginPassword() {
+  const input = document.getElementById('loginPassword');
+  const eyeIcon = document.getElementById('eyeIcon');
+  const eyeOffIcon = document.getElementById('eyeOffIcon');
+
+  if (input.type === 'password') {
+    input.type = 'text';
+    eyeIcon.style.display = 'none';
+    eyeOffIcon.style.display = 'block';
+  } else {
+    input.type = 'password';
+    eyeIcon.style.display = 'block';
+    eyeOffIcon.style.display = 'none';
   }
 }
