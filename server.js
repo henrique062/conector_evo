@@ -2,7 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const cookieParser = require('cookie-parser');
 const { query, testConnection } = require('./database/db');
+const { requireAuth, requireMaster, login, logout, hashPassword, getUserInstances, canAccessInstance } = require('./lib/auth');
+const WhatsAppAdapter = require('./lib/whatsapp-adapter');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,26 +13,42 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(cookieParser());
 
-// Evolution API config
-const EVO_URL = process.env.EVOLUTION_API_URL?.replace(/\/$/, '');
-const EVO_KEY = process.env.EVOLUTION_API_KEY;
+// Provider config
+const API_PROVIDER = process.env.API_PROVIDER || 'evolution';
 
-if (!EVO_URL || !EVO_KEY) {
-  console.error('❌ EVOLUTION_API_URL e EVOLUTION_API_KEY devem ser definidos nas variáveis de ambiente ou no .env');
-  console.error('   Defina as variáveis no painel do EasyPanel ou crie um arquivo .env na raiz do projeto.');
-  process.exit(1);
+function getAdapter(instanceToken) {
+  if (API_PROVIDER === 'evolution') {
+    const url = process.env.EVOLUTION_API_URL?.replace(/\/$/, '');
+    const key = process.env.EVOLUTION_API_KEY;
+    if (!url || !key) {
+      throw new Error('EVOLUTION_API_URL e EVOLUTION_API_KEY são obrigatórios');
+    }
+    return new WhatsAppAdapter('evolution', { baseUrl: url, apiKey: key });
+  } else {
+    const url = process.env.UAZAPI_URL?.replace(/\/$/, '');
+    const adminToken = process.env.UAZAPI_ADMIN_TOKEN;
+    if (!url || !adminToken) {
+      throw new Error('UAZAPI_URL e UAZAPI_ADMIN_TOKEN são obrigatórios');
+    }
+    return new WhatsAppAdapter('uazapi', {
+      baseUrl: url,
+      adminToken: adminToken,
+      token: instanceToken || null,
+    });
+  }
 }
+
+// Servir arquivos estáticos
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ===== DATABASE HELPERS =====
 
-// Registrar log de atividade
 async function logActivity(instanceName, action, details = {}, req = null) {
   try {
-    const ipAddress = req ? req.ip || req.connection.remoteAddress : null;
+    const ipAddress = req ? req.ip || req.connection?.remoteAddress : null;
     const userAgent = req ? req.get('user-agent') : null;
-
     await query(
       `INSERT INTO instance_logs (instance_name, action, details, ip_address, user_agent)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -40,73 +59,52 @@ async function logActivity(instanceName, action, details = {}, req = null) {
   }
 }
 
-// Sincronizar instância no banco
 async function syncInstanceToDB(instanceData) {
   try {
-    const {
-      instance,
-      instance: { instanceName },
-      hash,
-      connectionStatus,
-    } = instanceData;
+    let name, status, number, profileName, profilePictureUrl, integration;
 
-    // Buscar dados adicionais do perfil se conectado
-    let profileName = null;
-    let profilePictureUrl = null;
+    if (API_PROVIDER === 'evolution') {
+      name = instanceData.instance?.instanceName;
+      status = instanceData.connectionStatus?.state || 'disconnected';
+      number = instanceData.instance?.number || null;
+      profileName = instanceData.instance?.profileName || null;
+      profilePictureUrl = instanceData.instance?.profilePicUrl || null;
+      integration = instanceData.instance?.integration || 'WHATSAPP-BAILEYS';
+    } else {
+      name = instanceData.name;
+      status = instanceData.status || 'disconnected';
+      number = instanceData.owner || null;
+      profileName = instanceData.profileName || null;
+      profilePictureUrl = instanceData.profilePicUrl || null;
+      integration = 'UAZAPI';
+    }
 
-    // Upsert da instância no banco
+    if (!name) return null;
+
+    // Mapear status para padrão interno
+    if (status === 'open') status = 'connected';
+
     const result = await query(
-      `INSERT INTO instances (
-        instance_name, integration, number, status, profile_name,
-        profile_picture_url, qrcode, owner, webhook_url, settings
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      ON CONFLICT (instance_name)
-      DO UPDATE SET
-        status = $4,
-        profile_name = $5,
-        profile_picture_url = $6,
-        updated_at = CURRENT_TIMESTAMP
-      RETURNING *`,
-      [
-        instanceName,
-        instance.integration || 'WHATSAPP-BAILEYS',
-        instance.number || null,
-        connectionStatus?.state || 'disconnected',
-        profileName,
-        profilePictureUrl,
-        true,
-        instance.owner || null,
-        instance.webhook || null,
-        instance.settings ? JSON.stringify(instance.settings) : null,
-      ]
+      `INSERT INTO instances (instance_name, integration, number, status, profile_name, profile_picture_url, qrcode, settings)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+       ON CONFLICT (instance_name)
+       DO UPDATE SET status = $4, profile_name = $5, profile_picture_url = $6, number = COALESCE($3, instances.number), updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [name, integration, number, status, profileName, profilePictureUrl,
+        instanceData.token ? JSON.stringify({ uazapi_token: instanceData.token }) : null]
     );
 
     return result.rows[0];
   } catch (error) {
-    console.error('Erro ao sincronizar instância no banco:', error.message);
+    console.error('Erro ao sincronizar instância:', error.message);
     return null;
   }
 }
 
-// Buscar todas as instâncias do banco
-async function getInstancesFromDB() {
-  try {
-    const result = await query(
-      `SELECT * FROM instances ORDER BY created_at DESC`
-    );
-    return result.rows;
-  } catch (error) {
-    console.error('Erro ao buscar instâncias do banco:', error.message);
-    return [];
-  }
-}
-
-// Atualizar status da instância
 async function updateInstanceStatus(instanceName, status) {
   try {
     await query(
-      `UPDATE instances SET status = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE instance_name = $2`,
+      'UPDATE instances SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE instance_name = $2',
       [status, instanceName]
     );
   } catch (error) {
@@ -114,126 +112,236 @@ async function updateInstanceStatus(instanceName, status) {
   }
 }
 
-// ===== EVOLUTION API HELPERS =====
-
-// Helper: proxy fetch to Evolution API
-async function evoFetch(method, endpoint, body = null) {
-  const url = `${EVO_URL}${endpoint}`;
-  const options = {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': EVO_KEY,
-    },
-  };
-  if (body) {
-    options.body = JSON.stringify(body);
-  }
-
-  const response = await fetch(url, options);
-  const contentType = response.headers.get('content-type');
-
-  let data;
-  if (contentType && contentType.includes('application/json')) {
-    data = await response.json();
-  } else {
-    data = await response.text();
-  }
-
-  return { status: response.status, data };
-}
-
-// Sincronizar todas as instâncias da Evolution API com o banco
 async function syncAllInstances() {
   try {
-    const { status, data } = await evoFetch('GET', '/instance/fetchInstances');
-
+    const adapter = getAdapter();
+    const { status, data } = await adapter.listInstances();
     if (status === 200 && Array.isArray(data)) {
       for (const instance of data) {
         await syncInstanceToDB(instance);
       }
-      console.log(`✅ ${data.length} instâncias sincronizadas com o banco`);
+      console.log(`✅ ${data.length} instâncias sincronizadas`);
     }
   } catch (error) {
     console.error('Erro ao sincronizar instâncias:', error.message);
   }
 }
 
-// ===== API ROUTES =====
-
-// GET /api/instances — Fetch all instances (do banco + sync com Evolution API)
-app.get('/api/instances', async (req, res) => {
+// Buscar token Uazapi de uma instância
+async function getUazapiToken(instanceName) {
+  if (API_PROVIDER !== 'uazapi') return null;
   try {
-    // Buscar da Evolution API
-    const { status, data } = await evoFetch('GET', '/instance/fetchInstances');
+    const result = await query('SELECT settings FROM instances WHERE instance_name = $1', [instanceName]);
+    if (result.rows.length > 0 && result.rows[0].settings) {
+      return result.rows[0].settings.uazapi_token || null;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
 
-    // Sincronizar com o banco
+// ===== AUTH ROUTES =====
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
+    }
+
+    const result = await login(email, password, req.ip, req.get('user-agent'));
+
+    if (!result.success) {
+      return res.status(401).json({ error: result.error });
+    }
+
+    res.cookie('token', result.token, {
+      httpOnly: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 dias
+      sameSite: 'lax',
+    });
+
+    res.json({ user: result.user, token: result.token });
+  } catch (error) {
+    console.error('Erro no login:', error.message);
+    res.status(500).json({ error: 'Erro ao fazer login' });
+  }
+});
+
+app.post('/api/auth/logout', requireAuth, async (req, res) => {
+  try {
+    const token = req.cookies?.token || req.headers.authorization?.replace('Bearer ', '');
+    await logout(token);
+    res.clearCookie('token');
+    res.json({ message: 'Logout realizado' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao fazer logout' });
+  }
+});
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({ user: req.user, provider: API_PROVIDER });
+});
+
+// ===== USER MANAGEMENT (MASTER ONLY) =====
+
+app.get('/api/users', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, email, name, role, is_active, last_login, created_at
+       FROM users ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao buscar usuários' });
+  }
+});
+
+app.post('/api/users', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const { email, password, name, role } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const userRole = role === 'master' ? 'master' : 'user';
+
+    const result = await query(
+      `INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, name, role, created_at`,
+      [email, passwordHash, name || email.split('@')[0], userRole]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'Email já cadastrado' });
+    }
+    res.status(500).json({ error: 'Falha ao criar usuário' });
+  }
+});
+
+app.delete('/api/users/:id', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    if (userId === req.user.id) {
+      return res.status(400).json({ error: 'Não é possível excluir a si mesmo' });
+    }
+    await query('DELETE FROM users WHERE id = $1', [userId]);
+    res.json({ message: 'Usuário excluído' });
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao excluir usuário' });
+  }
+});
+
+// ===== USER-INSTANCE BINDING (MASTER ONLY) =====
+
+app.get('/api/users/:id/instances', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT ui.*, i.instance_name, i.status, i.number
+       FROM user_instances ui
+       JOIN instances i ON ui.instance_id = i.id
+       WHERE ui.user_id = $1`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao buscar vinculações' });
+  }
+});
+
+app.post('/api/users/:id/instances', requireAuth, requireMaster, async (req, res) => {
+  try {
+    const { instance_id } = req.body;
+    if (!instance_id) {
+      return res.status(400).json({ error: 'instance_id é obrigatório' });
+    }
+
+    const result = await query(
+      `INSERT INTO user_instances (user_id, instance_id, can_connect, can_disconnect)
+       VALUES ($1, $2, true, true)
+       ON CONFLICT (user_id, instance_id) DO NOTHING
+       RETURNING *`,
+      [req.params.id, instance_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({ error: 'Vinculação já existe' });
+    }
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao vincular instância' });
+  }
+});
+
+app.delete('/api/users/:userId/instances/:instanceId', requireAuth, requireMaster, async (req, res) => {
+  try {
+    await query(
+      'DELETE FROM user_instances WHERE user_id = $1 AND instance_id = $2',
+      [req.params.userId, req.params.instanceId]
+    );
+    res.json({ message: 'Vinculação removida' });
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao remover vinculação' });
+  }
+});
+
+// ===== INSTANCE ROUTES (AUTH REQUIRED) =====
+
+app.get('/api/instances', requireAuth, async (req, res) => {
+  try {
+    const adapter = getAdapter();
+    const { status, data } = await adapter.listInstances();
+
     if (status === 200 && Array.isArray(data)) {
       for (const instance of data) {
         await syncInstanceToDB(instance);
       }
     }
 
-    // Retornar dados do banco (fonte única da verdade)
-    const instances = await getInstancesFromDB();
+    // Buscar instâncias do banco filtradas por permissão
+    const instances = await getUserInstances(req.user.id);
 
-    // Mesclar com dados da Evolution API
-    const mergedData = data.map(evoInstance => {
-      const dbInstance = instances.find(
-        db => db.instance_name === evoInstance.instance.instanceName
-      );
-      return {
-        ...evoInstance,
-        dbData: dbInstance,
-      };
+    // Mesclar com dados da API
+    const mergedData = instances.map(dbInst => {
+      let apiData = null;
+      if (Array.isArray(data)) {
+        if (API_PROVIDER === 'evolution') {
+          apiData = data.find(d => d.instance?.instanceName === dbInst.instance_name);
+        } else {
+          apiData = data.find(d => d.name === dbInst.instance_name);
+        }
+      }
+      return { ...dbInst, apiData };
     });
 
-    res.status(200).json(mergedData);
+    res.json(mergedData);
   } catch (error) {
     console.error('Erro ao buscar instâncias:', error.message);
     res.status(500).json({ error: 'Falha ao buscar instâncias' });
   }
 });
 
-// POST /api/instances — Create a new instance
-app.post('/api/instances', async (req, res) => {
+app.post('/api/instances', requireAuth, requireMaster, async (req, res) => {
   try {
-    const { instanceName, integration, number, qrcode, settings } = req.body;
-
+    const { instanceName, integration, number } = req.body;
     if (!instanceName) {
       return res.status(400).json({ error: 'instanceName é obrigatório' });
     }
 
-    const payload = {
-      instanceName,
-      integration: integration || 'WHATSAPP-BAILEYS',
-      qrcode: qrcode !== undefined ? qrcode : true,
-    };
+    const adapter = getAdapter();
+    const { status, data } = await adapter.createInstance(instanceName, { integration, number });
 
-    if (number) payload.number = number;
-    if (settings) payload.settings = settings;
-
-    // Criar na Evolution API
-    const { status, data } = await evoFetch('POST', '/instance/create', payload);
-
-    if (status === 201 || status === 200) {
-      // Salvar no banco
+    if (status === 200 || status === 201) {
+      // Salvar no banco - incluindo token uazapi se existir
+      const settings = data.token ? JSON.stringify({ uazapi_token: data.token }) : null;
       await query(
         `INSERT INTO instances (instance_name, integration, number, status, qrcode, settings)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (instance_name) DO NOTHING`,
-        [
-          instanceName,
-          payload.integration,
-          number || null,
-          'disconnected',
-          payload.qrcode,
-          settings ? JSON.stringify(settings) : null,
-        ]
+         VALUES ($1, $2, $3, 'disconnected', true, $4) ON CONFLICT (instance_name) DO NOTHING`,
+        [instanceName, API_PROVIDER === 'uazapi' ? 'UAZAPI' : (integration || 'WHATSAPP-BAILEYS'), number || null, settings]
       );
-
-      // Registrar log
-      await logActivity(instanceName, 'create', { payload }, req);
+      await logActivity(instanceName, 'create', { provider: API_PROVIDER }, req);
     }
 
     res.status(status).json(data);
@@ -243,30 +351,52 @@ app.post('/api/instances', async (req, res) => {
   }
 });
 
-// GET /api/instances/:name/connect — Get QR Code
-app.get('/api/instances/:name/connect', async (req, res) => {
+app.get('/api/instances/:name/connect', requireAuth, async (req, res) => {
   try {
-    const { status, data } = await evoFetch('GET', `/instance/connect/${req.params.name}`);
+    const instanceName = req.params.name;
+
+    // Verificar permissão para usuários normais
+    if (req.user.role !== 'master') {
+      const inst = await query('SELECT id FROM instances WHERE instance_name = $1', [instanceName]);
+      if (inst.rows.length === 0) return res.status(404).json({ error: 'Instância não encontrada' });
+      const allowed = await canAccessInstance(req.user.id, inst.rows[0].id, 'connect');
+      if (!allowed) return res.status(403).json({ error: 'Sem permissão' });
+    }
+
+    const token = await getUazapiToken(instanceName);
+    const adapter = getAdapter(token);
+    const { status, data } = await adapter.connectInstance(instanceName);
 
     if (status === 200) {
-      await updateInstanceStatus(req.params.name, 'connecting');
-      await logActivity(req.params.name, 'connect', { qrcode: true }, req);
+      await updateInstanceStatus(instanceName, 'connecting');
+      await logActivity(instanceName, 'connect', { user: req.user.email }, req);
     }
 
     res.status(status).json(data);
   } catch (error) {
-    console.error('Erro ao conectar instância:', error.message);
+    console.error('Erro ao conectar:', error.message);
     res.status(500).json({ error: 'Falha ao gerar QR Code' });
   }
 });
 
-// GET /api/instances/:name/status — Connection state
-app.get('/api/instances/:name/status', async (req, res) => {
+app.get('/api/instances/:name/status', requireAuth, async (req, res) => {
   try {
-    const { status, data } = await evoFetch('GET', `/instance/connectionState/${req.params.name}`);
+    const instanceName = req.params.name;
+    const token = await getUazapiToken(instanceName);
+    const adapter = getAdapter(token);
+    const { status, data } = await adapter.getInstanceStatus(instanceName);
 
-    if (status === 200 && data.state) {
-      await updateInstanceStatus(req.params.name, data.state);
+    if (status === 200) {
+      let normalizedStatus;
+      if (API_PROVIDER === 'evolution') {
+        normalizedStatus = data.state || data.instance?.state;
+        if (normalizedStatus === 'open') normalizedStatus = 'connected';
+      } else {
+        normalizedStatus = data.instance?.status || data.status;
+      }
+      if (normalizedStatus) {
+        await updateInstanceStatus(instanceName, normalizedStatus);
+      }
     }
 
     res.status(status).json(data);
@@ -276,124 +406,125 @@ app.get('/api/instances/:name/status', async (req, res) => {
   }
 });
 
-// PUT /api/instances/:name/restart — Restart instance
-app.put('/api/instances/:name/restart', async (req, res) => {
+app.put('/api/instances/:name/restart', requireAuth, requireMaster, async (req, res) => {
   try {
-    const { status, data } = await evoFetch('PUT', `/instance/restart/${req.params.name}`);
+    const instanceName = req.params.name;
+    const token = await getUazapiToken(instanceName);
+    const adapter = getAdapter(token);
+    const { status, data } = await adapter.restartInstance(instanceName);
 
     if (status === 200) {
-      await updateInstanceStatus(req.params.name, 'connecting');
-      await logActivity(req.params.name, 'restart', {}, req);
+      await updateInstanceStatus(instanceName, 'connecting');
+      await logActivity(instanceName, 'restart', { user: req.user.email }, req);
     }
 
     res.status(status).json(data);
   } catch (error) {
-    console.error('Erro ao reiniciar instância:', error.message);
-    res.status(500).json({ error: 'Falha ao reiniciar instância' });
+    console.error('Erro ao reiniciar:', error.message);
+    res.status(500).json({ error: 'Falha ao reiniciar' });
   }
 });
 
-// DELETE /api/instances/:name/logout — Logout instance
-app.delete('/api/instances/:name/logout', async (req, res) => {
+app.delete('/api/instances/:name/logout', requireAuth, async (req, res) => {
   try {
-    const { status, data } = await evoFetch('DELETE', `/instance/logout/${req.params.name}`);
+    const instanceName = req.params.name;
+
+    // Verificar permissão para usuários normais
+    if (req.user.role !== 'master') {
+      const inst = await query('SELECT id FROM instances WHERE instance_name = $1', [instanceName]);
+      if (inst.rows.length === 0) return res.status(404).json({ error: 'Instância não encontrada' });
+      const allowed = await canAccessInstance(req.user.id, inst.rows[0].id, 'disconnect');
+      if (!allowed) return res.status(403).json({ error: 'Sem permissão' });
+    }
+
+    const token = await getUazapiToken(instanceName);
+    const adapter = getAdapter(token);
+    const { status, data } = await adapter.disconnectInstance(instanceName);
 
     if (status === 200) {
-      await updateInstanceStatus(req.params.name, 'disconnected');
-      await logActivity(req.params.name, 'logout', {}, req);
+      await updateInstanceStatus(instanceName, 'disconnected');
+      await logActivity(instanceName, 'logout', { user: req.user.email }, req);
     }
 
     res.status(status).json(data);
   } catch (error) {
-    console.error('Erro ao desconectar instância:', error.message);
-    res.status(500).json({ error: 'Falha ao desconectar instância' });
+    console.error('Erro ao desconectar:', error.message);
+    res.status(500).json({ error: 'Falha ao desconectar' });
   }
 });
 
-// DELETE /api/instances/:name — Delete instance
-app.delete('/api/instances/:name', async (req, res) => {
+app.delete('/api/instances/:name', requireAuth, requireMaster, async (req, res) => {
   try {
-    const { status, data } = await evoFetch('DELETE', `/instance/delete/${req.params.name}`);
+    const instanceName = req.params.name;
+    const token = await getUazapiToken(instanceName);
+    const adapter = getAdapter(token);
+    const { status, data } = await adapter.deleteInstance(instanceName);
 
     if (status === 200) {
-      // Remover do banco
-      await query('DELETE FROM instances WHERE instance_name = $1', [req.params.name]);
-      await logActivity(req.params.name, 'delete', {}, req);
+      await query('DELETE FROM instances WHERE instance_name = $1', [instanceName]);
+      await logActivity(instanceName, 'delete', { user: req.user.email }, req);
     }
 
     res.status(status).json(data);
   } catch (error) {
-    console.error('Erro ao deletar instância:', error.message);
-    res.status(500).json({ error: 'Falha ao deletar instância' });
+    console.error('Erro ao deletar:', error.message);
+    res.status(500).json({ error: 'Falha ao deletar' });
   }
 });
 
-// GET /api/logs — Buscar logs de atividades
-app.get('/api/logs', async (req, res) => {
+app.get('/api/logs', requireAuth, requireMaster, async (req, res) => {
   try {
-    const limit = req.query.limit || 100;
-    const result = await query(
-      `SELECT * FROM instance_logs ORDER BY created_at DESC LIMIT $1`,
-      [limit]
-    );
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const result = await query('SELECT * FROM instance_logs ORDER BY created_at DESC LIMIT $1', [limit]);
     res.json(result.rows);
   } catch (error) {
-    console.error('Erro ao buscar logs:', error.message);
     res.status(500).json({ error: 'Falha ao buscar logs' });
   }
 });
 
-// GET /api/stats — Estatísticas do dashboard
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', requireAuth, async (req, res) => {
   try {
     const result = await query(`
       SELECT
         COUNT(*) as total,
-        COUNT(CASE WHEN status = 'open' THEN 1 END) as connected,
-        COUNT(CASE WHEN status != 'open' THEN 1 END) as disconnected
+        COUNT(CASE WHEN status = 'connected' OR status = 'open' THEN 1 END) as connected,
+        COUNT(CASE WHEN status != 'connected' AND status != 'open' THEN 1 END) as disconnected
       FROM instances
     `);
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao buscar estatísticas:', error.message);
     res.status(500).json({ error: 'Falha ao buscar estatísticas' });
   }
 });
 
-// Fallback: serve index.html for SPA
+// Fallback SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ===== STARTUP =====
-
 async function startServer() {
   try {
-    // Testar conexão com o banco
-    console.log('\n🔍 Testando conexão com PostgreSQL...');
+    console.log(`\n🔍 Provider: ${API_PROVIDER}`);
+    console.log('🔍 Testando conexão com PostgreSQL...');
     const dbConnected = await testConnection();
-
     if (!dbConnected) {
-      console.error('❌ Não foi possível conectar ao banco de dados');
-      console.error('   Verifique a variável DATABASE_URL no .env');
+      console.error('❌ Falha na conexão com o banco');
       process.exit(1);
     }
 
-    // Sincronizar instâncias na inicialização
     console.log('🔄 Sincronizando instâncias...');
     await syncAllInstances();
 
-    // Iniciar servidor
     app.listen(PORT, () => {
-      console.log(`\n🚀 Dashboard Evolution API rodando em http://localhost:${PORT}`);
-      console.log(`📡 Conectado a: ${EVO_URL}`);
+      console.log(`\n🚀 Dashboard rodando em http://localhost:${PORT}`);
+      console.log(`📡 Provider: ${API_PROVIDER}`);
       console.log(`💾 Banco de dados: Conectado\n`);
     });
 
-    // Sincronizar instâncias a cada 5 minutos
     setInterval(syncAllInstances, 5 * 60 * 1000);
   } catch (error) {
-    console.error('❌ Erro ao iniciar servidor:', error.message);
+    console.error('❌ Erro ao iniciar:', error.message);
     process.exit(1);
   }
 }

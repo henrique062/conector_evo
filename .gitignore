@@ -1,3 +1,5 @@
 node_modules/
 .env
+.env.external
 .qodo/
+uazapi-openapi-spec.yaml
