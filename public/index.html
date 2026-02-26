@@ -5,7 +5,30 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Evolution Dashboard | iPPLE</title>
-  <meta name="description" content="Dashboard para gerenciar instâncias WhatsApp via Evolution API">
+  <meta name="description" content="Painel de controle para gerenciar instâncias WhatsApp via Evolution API.">
+  <meta name="keywords" content="evolution api, whatsapp, painel, dashboard, instâncias">
+  <meta name="author" content="iPPLE">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#25d366">
+
+  <!-- Open Graph / Meta -->
+  <meta property="og:title" content="Evolution Dashboard | iPPLE">
+  <meta property="og:description" content="Acesse o seu dashboard para administrar conexões do WhatsApp via Evolution API de forma rápida e segura.">
+  <meta property="og:image" content="/favicon.svg">
+  <meta property="og:image:alt" content="Logo Evolution Dashboard">
+  <meta property="og:type" content="website">
+  
+  <!-- Twitter Cards -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Evolution Dashboard | iPPLE">
+  <meta name="twitter:description" content="Acesse o seu dashboard para administrar conexões do WhatsApp via Evolution API de forma rápida e segura.">
+  <meta name="twitter:image" content="/favicon.svg">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
@@ -65,7 +88,7 @@
   <main class="main-content">
     <!-- Top Bar -->
     <header class="topbar">
-      <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()">
+      <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()" aria-label="Abrir menu">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round">
           <line x1="3" y1="12" x2="21" y2="12" />
@@ -194,7 +217,7 @@
               <label for="settingsApiKey">API Key</label>
               <div class="input-with-action">
                 <input type="password" id="settingsApiKey" value="••••••••••••••••" readonly>
-                <button class="btn-icon" onclick="toggleApiKeyVisibility()">
+                <button class="btn-icon" onclick="toggleApiKeyVisibility()" aria-label="Mostrar/Ocultar API Key">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
@@ -238,7 +261,7 @@
     <div class="modal">
       <div class="modal-header">
         <h3>Nova Instância</h3>
-        <button class="modal-close" onclick="closeCreateModal()">
+        <button class="modal-close" onclick="closeCreateModal()" aria-label="Fechar Modal">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" />
@@ -275,7 +298,7 @@
     <div class="modal modal-qr">
       <div class="modal-header">
         <h3 id="qrModalTitle">Conectar WhatsApp</h3>
-        <button class="modal-close" onclick="closeQrModal()">
+        <button class="modal-close" onclick="closeQrModal()" aria-label="Fechar Modal de QR Code">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" />
@@ -309,7 +332,7 @@
     <div class="modal modal-confirm">
       <div class="modal-header">
         <h3 id="confirmTitle">Confirmar</h3>
-        <button class="modal-close" onclick="closeConfirmModal()">
+        <button class="modal-close" onclick="closeConfirmModal()" aria-label="Fechar Modal de Confirmação">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" />
